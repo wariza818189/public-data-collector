@@ -1,0 +1,8 @@
+requests
+beautifulsoup4
+lxml
+pandas
+openpyxl
+httpx
+python-dotenv
+playwright
