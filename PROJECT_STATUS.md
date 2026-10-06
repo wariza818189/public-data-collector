@@ -38,6 +38,7 @@ src/main.py currently:
 - follows next-page links through the full Books to Scrape catalogue
 - parses 1,000 books across 50 pages
 - pauses one second between page requests
+- supports argparse options --output-dir, --delay, and --start-url, retaining current defaults
 - uses 5-second connect and 20-second read timeouts
 - retries transient failures at most twice, with backoff and Retry-After handling
 - detects pagination loops and exports only after all pages are collected
@@ -70,13 +71,15 @@ Logging tests cover progress context, retry and failure levels, successful save
 summaries, and no success message after a failed export.
 Excel tests verify saved formatting, numeric values, hyperlinks, long titles,
 literal text, and unchanged CSV bytes.
+CLI tests cover defaults, invalid values, help, option routing, custom pacing,
+directory creation, and collection/export from a custom starting page.
 README documents the output schema and test command.
 
 ## Next Milestone
 
 The target fields, full-catalogue pagination, retries, output validation, and console
-logging are implemented. The Phase 1 collector milestones are complete; the next
-milestone has not yet been selected.
+logging, Excel formatting, and a minimal CLI are implemented. The Phase 1 collector
+milestones are complete; the next milestone has not yet been selected.
 
 ## Explicitly Out of Scope For Now
 

@@ -1,6 +1,8 @@
 import unittest
 import logging
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import call, patch
@@ -10,7 +12,7 @@ from openpyxl import load_workbook
 
 from src.main import (
     FIELDS, REQUEST_TIMEOUT, URL, collect_books, fetch_html, main, parse_books,
-    parse_next_page, retry_delay, save_outputs, validate_books,
+    parse_args, parse_next_page, retry_delay, save_outputs, validate_books,
 )
 
 
@@ -152,7 +154,7 @@ class PaginationTests(unittest.TestCase):
         }
         fetch.side_effect = pages.__getitem__
         with patch("src.main.save_outputs") as save:
-            main()
+            main([])
         self.assertEqual(fetch.call_args_list, [call(URL), call(page2_url), call(page3_url)])
         self.assertEqual(sleep_mock.call_args_list, [call(1), call(1)])
         save.assert_called_once()
@@ -183,7 +185,7 @@ class PaginationTests(unittest.TestCase):
         ]
         with patch("src.main.save_outputs") as save:
             with self.assertRaisesRegex(RuntimeError, "Pagination loop"):
-                main()
+                main([])
         self.assertEqual(fetch.call_count, 2)
         save.assert_not_called()
 
@@ -201,7 +203,7 @@ class PaginationTests(unittest.TestCase):
                 fetch.side_effect = [first_page, second_page]
                 with patch("src.main.save_outputs") as save:
                     with self.assertRaisesRegex(error, message):
-                        main()
+                        main([])
                 save.assert_not_called()
 
 
@@ -283,7 +285,7 @@ class FetchFailureTests(unittest.TestCase):
     def test_exhausted_network_failure_does_not_export(self, get, sleep_mock):
         with patch("src.main.save_outputs") as save:
             with self.assertRaisesRegex(RuntimeError, "after 3 attempt"):
-                main()
+                main([])
             save.assert_not_called()
         self.assertEqual(get.call_count, 3)
 
@@ -363,7 +365,7 @@ class LoggingTests(unittest.TestCase):
     def test_exhaustion_logs_one_final_error_and_still_raises(self, get, sleep_mock):
         with self.assertLogs("src.main", level="INFO") as captured:
             with self.assertRaisesRegex(RuntimeError, "after 3 attempt"):
-                main()
+                main([])
         self.assertEqual([record.levelno for record in captured.records],
                          [logging.INFO, logging.WARNING, logging.WARNING, logging.ERROR])
         message = captured.records[-1].getMessage()
@@ -377,14 +379,14 @@ class LoggingTests(unittest.TestCase):
                     with patch("src.main.save_outputs", side_effect=error):
                         with self.assertLogs("src.main", level="ERROR") as captured:
                             with self.assertRaises(type(error)) as caught:
-                                main()
+                                main([])
                 self.assertIs(caught.exception, error)
                 self.assertEqual(len(captured.records), 1)
                 self.assertIn(str(error), captured.records[0].getMessage())
         with patch("src.main.collect_books", side_effect=ValueError("Book 1: missing title")):
             with self.assertLogs("src.main", level="ERROR") as captured:
                 with self.assertRaises(ValueError):
-                    main()
+                    main([])
         self.assertIn("missing title", captured.records[0].getMessage())
 
     def test_save_summary_follows_both_successful_exports(self):
@@ -414,7 +416,7 @@ class LoggingTests(unittest.TestCase):
     @patch("src.main.collect_books", return_value=[])
     @patch("src.main.logging.basicConfig")
     def test_main_configures_readable_info_logging(self, configure, collect, save):
-        main()
+        main([])
         configure.assert_called_once_with(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
@@ -488,6 +490,112 @@ class ExcelExportTests(unittest.TestCase):
                 self.assertEqual(workbook.active["A2"].data_type, "s")
             finally:
                 workbook.close()
+
+
+class CliTests(unittest.TestCase):
+    def test_defaults_preserve_current_settings(self):
+        args = parse_args([])
+        self.assertEqual(args.output_dir, Path("data/processed"))
+        self.assertEqual(args.delay, 1.0)
+        self.assertEqual(args.start_url, URL)
+
+    @patch("src.main.collect_books")
+    @patch("src.main.save_outputs")
+    def test_options_reach_collection_and_export(self, save, collect):
+        rows = parse_books(BOOK_HTML)
+        collect.return_value = rows
+        with TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "exports"
+            page_url = URL + "catalogue/page-2.html"
+            main(["--output-dir", str(destination), "--delay", "2.5", "--start-url", page_url])
+            collect.assert_called_once_with(start_url=page_url, delay=2.5)
+            save.assert_called_once_with(rows, output_dir=destination)
+
+    def test_invalid_values_fail_before_collection(self):
+        cases = (
+            (["--delay", "-1"], "finite nonnegative"),
+            (["--delay", "nan"], "finite nonnegative"),
+            (["--delay", "inf"], "finite nonnegative"),
+            (["--delay", "invalid"], "finite nonnegative"),
+            (["--start-url", "catalogue/page-2.html"], "absolute HTTP(S)"),
+            (["--start-url", "ftp://books.toscrape.com"], "absolute HTTP(S)"),
+            (["--start-url", "https://"], "absolute HTTP(S)"),
+            (["--start-url", "http://["], "absolute HTTP(S)"),
+            (["--output-dir", " "], "must not be empty"),
+            (["--delay"], "expected one argument"),
+            (["--unknown-option"], "unrecognized arguments"),
+        )
+        for argv, message in cases:
+            with self.subTest(argv=argv):
+                error_output = StringIO()
+                with patch("src.main.collect_books") as collect, redirect_stderr(error_output):
+                    with self.assertRaises(SystemExit) as caught:
+                        main(argv)
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn(message, error_output.getvalue())
+                collect.assert_not_called()
+
+    def test_existing_files_are_rejected_as_output_directories(self):
+        with TemporaryDirectory() as temporary:
+            file = Path(temporary) / "file"
+            file.write_text("existing data")
+            for path in (file, file / "nested"):
+                with self.subTest(path=path), redirect_stderr(StringIO()):
+                    with self.assertRaises(SystemExit) as caught:
+                        parse_args(["--output-dir", str(path)])
+                    self.assertEqual(caught.exception.code, 2)
+            self.assertEqual(file.read_text(), "existing data")
+
+    def test_output_directory_expands_home(self):
+        args = parse_args(["--output-dir", "~"])
+        self.assertEqual(args.output_dir, Path.home())
+
+    @patch("src.main.collect_books")
+    def test_help_lists_options_and_exits_without_collection(self, collect):
+        output = StringIO()
+        with redirect_stdout(output):
+            with self.assertRaises(SystemExit) as caught:
+                main(["--help"])
+        self.assertEqual(caught.exception.code, 0)
+        for option in ("--output-dir", "--delay", "--start-url", "data/processed", URL):
+            self.assertIn(option, output.getvalue())
+        collect.assert_not_called()
+
+    @patch("src.main.sleep")
+    @patch("src.main.fetch_html")
+    def test_cli_collects_and_saves_using_custom_values(self, fetch, sleep_mock):
+        page_url = URL + "catalogue/page-49.html"
+        book = BOOK_HTML.replace("catalogue/a-light", "a-light")
+        second = book.replace("a-light-in-the-attic_1000", "second-book")
+        fetch.side_effect = [
+            book + '<li class="next"><a href="page-50.html">next</a></li>', second,
+        ]
+        with TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "nested" / "exports"
+            main(["--start-url", page_url, "--delay", "2.5", "--output-dir", str(destination)])
+            self.assertEqual(fetch.call_args_list,
+                             [call(page_url), call(URL + "catalogue/page-50.html")])
+            sleep_mock.assert_called_once_with(2.5)
+            workbook = load_workbook(destination / "books.xlsx")
+            try:
+                self.assertEqual([cell.value for cell in workbook.active[1]], list(FIELDS))
+                self.assertEqual(workbook.active.max_row, 3)
+                self.assertEqual(workbook.active["E2"].value,
+                                 URL + "catalogue/a-light-in-the-attic_1000/index.html")
+            finally:
+                workbook.close()
+            self.assertTrue((destination / "books.csv").exists())
+
+    @patch("src.main.sleep")
+    @patch("src.main.fetch_html")
+    def test_zero_delay_is_supported(self, fetch, sleep_mock):
+        fetch.side_effect = [
+            BOOK_HTML + '<li class="next"><a href="catalogue/page-2.html">next</a></li>',
+            BOOK_HTML,
+        ]
+        self.assertEqual(parse_args(["--delay", "0"]).delay, 0.0)
+        collect_books(delay=0.0)
+        sleep_mock.assert_called_once_with(0.0)
 
 
 class ValidationTests(unittest.TestCase):

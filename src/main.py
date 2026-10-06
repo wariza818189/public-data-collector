@@ -1,3 +1,4 @@
+import argparse
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import logging
@@ -170,7 +171,7 @@ def parse_next_page(html: str, base_url: str) -> str | None:
     return next_url
 
 
-def collect_books(start_url: str = URL) -> list[dict[str, str | float | int]]:
+def collect_books(start_url: str = URL, delay: float = 1.0) -> list[dict[str, str | float | int]]:
     books = []
     visited: set[str] = set()
     page_url: str | None = start_url
@@ -179,7 +180,7 @@ def collect_books(start_url: str = URL) -> list[dict[str, str | float | int]]:
         if page_url in visited:
             raise RuntimeError(f"Pagination loop detected at {page_url}")
         if visited:
-            sleep(1)
+            sleep(delay)
         logger.info("Fetching page %d: %s", len(visited) + 1, page_url)
         html = fetch_html(page_url)
         page_books = parse_books(html, page_url)
@@ -251,14 +252,16 @@ def save_excel(rows: list[dict[str, str | float | int]], path: Path) -> None:
     workbook.close()
 
 
-def save_outputs(rows: list[dict[str, str | float | int]]) -> None:
+def save_outputs(rows: list[dict[str, str | float | int]], output_dir: Path | None = None) -> None:
     validate_books(rows)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if output_dir is None:
+        output_dir = OUTPUT_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     df = pd.DataFrame(rows, columns=FIELDS)
 
-    csv_path = OUTPUT_DIR / "books.csv"
-    xlsx_path = OUTPUT_DIR / "books.xlsx"
+    csv_path = output_dir / "books.csv"
+    xlsx_path = output_dir / "books.xlsx"
 
     df.to_csv(csv_path, index=False)
     save_excel(rows, xlsx_path)
@@ -266,11 +269,55 @@ def save_outputs(rows: list[dict[str, str | float | int]]) -> None:
     logger.info("Saved %d books | CSV: %s | Excel: %s", len(df), csv_path, xlsx_path)
 
 
-def main() -> None:
+def delay_seconds(value: str) -> float:
+    try:
+        delay = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("delay must be a finite nonnegative number of seconds") from exc
+    if not isfinite(delay) or delay < 0:
+        raise argparse.ArgumentTypeError("delay must be a finite nonnegative number of seconds")
+    return delay
+
+
+def start_url(value: str) -> str:
+    if not is_absolute_http_url(value):
+        raise argparse.ArgumentTypeError("start URL must be an absolute HTTP(S) URL")
+    return value
+
+
+def output_directory(value: str) -> Path:
+    if not value.strip():
+        raise argparse.ArgumentTypeError("output directory must not be empty")
+    try:
+        path = Path(value).expanduser()
+        for candidate in (path, *path.parents):
+            if candidate.exists() and not candidate.is_dir():
+                raise argparse.ArgumentTypeError(f"output directory path contains a file: {candidate}")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f"invalid output directory: {exc}") from exc
+    return path
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Collect Books to Scrape pages and export books.csv and books.xlsx.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--output-dir", type=output_directory, default=OUTPUT_DIR,
+                        help="directory for CSV and Excel exports (created if needed)")
+    parser.add_argument("--delay", type=delay_seconds, default=1.0,
+                        help="pause between page requests in seconds; must be finite and nonnegative")
+    parser.add_argument("--start-url", type=start_url, default=URL,
+                        help="absolute HTTP(S) URL of the first catalogue page to collect")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     try:
-        books = collect_books()
-        save_outputs(books)
+        books = collect_books(start_url=args.start_url, delay=args.delay)
+        save_outputs(books, output_dir=args.output_dir)
     except (RuntimeError, ValueError, OSError) as exc:
         logger.error("Collector failed: %s", exc)
         raise

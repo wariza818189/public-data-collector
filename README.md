@@ -32,7 +32,7 @@ The collector follows next-page links through the full Books to Scrape catalogue
 
 The site's HTML is decoded as UTF-8 to preserve the pound sign before price conversion.
 Malformed book cards raise an error identifying the page URL, book number, and field.
-Requests run sequentially with a one-second pause between pages. Product URLs are
+Requests run sequentially with a one-second pause between pages by default. Product URLs are
 resolved against each page's URL. Missing books, failed requests, and pagination
 loops stop collection before export, preserving any existing output files.
 
@@ -60,7 +60,7 @@ currency with two decimal places, ratings stay numeric, and product URLs are
 clickable hyperlinks. Both exports retain the same five columns; CSV formatting
 is unchanged.
 
-Generated data is stored under:
+Generated data is stored by default under:
 
 data/processed/
 
@@ -84,7 +84,26 @@ python -m pip install -r requirements-dev.txt
 
 ## Run
 
+```bash
 python src/main.py
+```
+
+With no options, collection starts at `https://books.toscrape.com/`, waits one
+second between pages, and saves `books.csv` and `books.xlsx` in `data/processed`.
+To choose a starting page, delay, and output directory:
+
+```bash
+python src/main.py --start-url https://books.toscrape.com/catalogue/page-49.html --delay 2 --output-dir data/processed/custom
+python src/main.py --help
+```
+
+`--start-url` must be an absolute HTTP(S) URL; the collector follows next-page
+links from that page onward. `--delay` must be a finite nonnegative number of
+seconds (fractional values and zero are accepted); retry backoff is unchanged.
+`--output-dir` accepts a nonempty directory path, expands `~`, and creates missing
+directories when saving. Paths are relative to the current working directory.
+An existing file in the directory path is rejected. Invalid options produce an
+argparse usage error before any requests are made.
 
 Console logging uses a concise `LEVEL: message` format. INFO messages show each
 page number and URL, then the saved book count and both output paths. Retries use
@@ -93,7 +112,7 @@ the original exception. DEBUG messages are hidden by default.
 
 ## Tests
 
-Run the offline encoding, parser, pagination, retry, validation, logging, and Excel export tests in the shared environment:
+Run the offline parser, pagination, retry, validation, logging, Excel export, and CLI tests in the shared environment:
 
 ```bash
 python -m unittest discover -s tests -v
