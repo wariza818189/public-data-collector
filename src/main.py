@@ -78,7 +78,6 @@ def fetch_html(url: str) -> str:
             if response is not None:
                 response.close()
         sleep(delay)
-    raise RuntimeError(f"Failed to fetch {url}")
 
 
 def parse_books(html: str, base_url: str = URL) -> list[dict[str, str | float | int]]:

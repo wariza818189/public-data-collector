@@ -15,29 +15,22 @@ Repository structure exists with:
 - data/raw/
 - data/processed/
 - requirements.txt
+- requirements-dev.txt
 - README.md
 - AGENTS.md
 - WORKFLOW.md
 
-The Python environment is external to this repository:
-
-~/automation-lab/.venv
-
-Verified environment:
-
-- Python 3.12.3
-- Git 2.43.0
-- Playwright 1.63.0
-- Chromium launches successfully
-- requests, BeautifulSoup, lxml, pandas, openpyxl, httpx, dotenv, and Playwright import successfully
+Python 3.12+ is required. Runtime dependencies are requests, BeautifulSoup, lxml,
+pandas, and openpyxl; requirements-dev.txt adds pytest. Virtual environments stay
+outside the repository. Browser automation is not used.
 
 ## Current Collector
 
 src/main.py currently:
 
 - follows next-page links through the full Books to Scrape catalogue
-- parses 1,000 books across 50 pages
-- pauses one second between page requests
+- has been verified against the 1,000-book, 50-page catalogue; counts are not hardcoded
+- pauses one second between page requests by default
 - supports argparse options --output-dir, --delay, and --start-url, retaining current defaults
 - uses 5-second connect and 20-second read timeouts
 - retries transient failures at most twice, with backoff and Retry-After handling
@@ -74,6 +67,10 @@ literal text, and unchanged CSV bytes.
 CLI tests cover defaults, invalid values, help, option routing, custom pacing,
 directory creation, and collection/export from a custom starting page.
 README documents the output schema and test command.
+Public-facing setup, command examples, project structure, and responsible
+collection guidance are documented. Unused runtime dependencies and local
+environment details have been removed; generated data and environment files
+are ignored by Git.
 
 ## Next Milestone
 

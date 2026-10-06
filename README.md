@@ -1,6 +1,8 @@
 # Public Data Collector
 
-Portfolio project for learning and demonstrating responsible public web data extraction, cleaning, validation, and export.
+A Python collector for the public [Books to Scrape](https://books.toscrape.com/)
+practice catalogue. It demonstrates static HTTP fetching, pagination, parsing,
+validation, retries, and CSV/Excel export in a small, testable project.
 
 ## Current Stack
 
@@ -10,7 +12,6 @@ Portfolio project for learning and demonstrating responsible public web data ext
 - lxml
 - pandas
 - openpyxl
-- Playwright for dynamic sites only when static HTTP is insufficient
 
 ## Current Practice Source
 
@@ -21,20 +22,23 @@ This is a public practice website intended for scraping exercises.
 
 ## Current Output
 
-The collector follows next-page links through the full Books to Scrape catalogue
-(currently 50 pages and 1,000 books), extracting:
+The default run follows next-page links through the full Books to Scrape catalogue,
+verified at 50 pages and 1,000 books. Counts are not hardcoded.
+CSV and Excel share the following schema:
 
-- title
-- price_gbp (numeric price in British pounds)
-- rating (integer from 1 to 5)
-- availability
-- product_url (absolute URL)
+| Column | Type | Meaning |
+| --- | --- | --- |
+| title | text | Full book title |
+| price_gbp | number | Price in British pounds, e.g. 51.77 |
+| rating | integer | Rating from 1 to 5 |
+| availability | text | Availability shown on the catalogue page |
+| product_url | text | Absolute URL of the book's product page |
 
 The site's HTML is decoded as UTF-8 to preserve the pound sign before price conversion.
 Malformed book cards raise an error identifying the page URL, book number, and field.
-Requests run sequentially with a one-second pause between pages by default. Product URLs are
-resolved against each page's URL. Missing books, failed requests, and pagination
-loops stop collection before export, preserving any existing output files.
+Requests run sequentially with a one-second pause between pages by default.
+Product URLs are resolved against each page's URL. Missing books, failed requests,
+and pagination loops stop collection before export, preserving any existing output files.
 
 Each request has a 5-second connect timeout and a 20-second read timeout. Timeouts,
 connection failures, incomplete responses, and HTTP 408, 429, 500, 502, 503, and 504
@@ -46,7 +50,7 @@ Read timeouts limit inactivity while receiving data, rather than total run time.
 Before writing either export, validation requires the exact five-field schema,
 nonempty titles and availability, finite nonnegative numeric prices, integer ratings
 from 1 to 5, and unique absolute HTTP(S) product URLs. Empty or invalid datasets
-raise a row-specific error before output files are opened. The catalogue size is
+raise a clear validation error before output files are opened. The catalogue size is
 not hardcoded, so changes to the site's book count are supported.
 
 Exports:
@@ -57,24 +61,34 @@ Exports:
 The Excel workbook uses openpyxl to add a restrained header style, a frozen header
 row, filters, and readable column widths. Long titles wrap, prices display as GBP
 currency with two decimal places, ratings stay numeric, and product URLs are
-clickable hyperlinks. Both exports retain the same five columns; CSV formatting
-is unchanged.
+clickable hyperlinks. Both exports contain the five columns documented above.
 
 Generated data is stored by default under:
 
 data/processed/
 
-Generated datasets are ignored by Git.
+Files under `data/raw/` and `data/processed/` are ignored by Git, except directory
+placeholders. If you choose an output directory elsewhere in the repository,
+exclude its generated files before committing.
 
-## Environment
+## Installation
 
-The development virtual environment is outside this repository:
+Use Python 3.12 or newer. Clone or download the repository and open a terminal
+in its root directory. Create a virtual environment outside the repository:
 
-~/automation-lab/.venv
+```bash
+python3 -m venv ../public-data-collector-venv
+source ../public-data-collector-venv/bin/activate
+```
 
-Activate it with:
+On Windows, use `py -3.12 -m venv ../public-data-collector-venv` and activate it
+in PowerShell with `../public-data-collector-venv/Scripts/Activate.ps1`.
 
-source ~/automation-lab/.venv/bin/activate
+For runtime dependencies only:
+
+```bash
+python -m pip install -r requirements.txt
+```
 
 Install development and test dependencies (including runtime dependencies) with:
 
@@ -112,23 +126,41 @@ the original exception. DEBUG messages are hidden by default.
 
 ## Tests
 
-Run the offline parser, pagination, retry, validation, logging, Excel export, and CLI tests in the shared environment:
+Install `requirements-dev.txt`, then run the offline parser, pagination, retry,
+validation, logging, Excel export, and CLI tests from the repository root:
 
 ```bash
-python -m unittest discover -s tests -v
+python -m pytest
 ```
 
-## Project Direction
+Tests use inline HTML and mocked requests; they do not need network access.
+The collector itself requires network access to Books to Scrape.
 
-The goal is to evolve this into a portfolio-quality data extraction project with:
+## Project Structure
 
-- structured parsing
-- clean numeric fields
-- ratings
-- canonical product URLs
-- validation
-- logging
-- automated tests
-- clean CSV and Excel exports
+```text
+src/main.py             Fetching, parsing, pagination, validation, export, and CLI
+tests/test_main.py      Offline tests
+data/raw/               Reserved for raw data (generated files ignored)
+data/processed/         Default CSV and Excel output directory
+requirements.txt        Runtime dependencies
+requirements-dev.txt    Runtime and test dependencies
+PROJECT_STATUS.md       Current milestone and scope
+AGENTS.md               Repository guidelines for coding agents
+WORKFLOW.md             Development and verification workflow
+```
 
-The project should remain simple and understandable rather than overengineered.
+## Responsible Collection
+
+Books to Scrape is a public practice site intended for scraping exercises. This
+collector uses static HTTP requests and collects book metadata, without browser
+automation or authentication bypasses. Use only sources you are authorized to
+access, respect site terms and robots.txt, keep request rates reasonable, and
+avoid unnecessary personal or sensitive data. The default page delay is one
+second; choose a suitable delay when using `--delay`. The collector does not
+automatically evaluate robots.txt or site terms.
+
+`--start-url` changes where collection begins on the practice site. It does not
+make this a general-purpose scraper: parsing depends on the Books to Scrape HTML
+structure. Collection and validation failures stop before export; a filesystem
+failure during saving can leave only one export updated.
