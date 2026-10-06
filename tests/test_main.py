@@ -6,9 +6,10 @@ from tempfile import TemporaryDirectory
 from unittest.mock import call, patch
 
 import requests
+from openpyxl import load_workbook
 
 from src.main import (
-    REQUEST_TIMEOUT, URL, collect_books, fetch_html, main, parse_books,
+    FIELDS, REQUEST_TIMEOUT, URL, collect_books, fetch_html, main, parse_books,
     parse_next_page, retry_delay, save_outputs, validate_books,
 )
 
@@ -404,7 +405,7 @@ class LoggingTests(unittest.TestCase):
     def test_failed_export_has_no_success_summary(self):
         with TemporaryDirectory() as temporary:
             with patch("src.main.OUTPUT_DIR", Path(temporary)):
-                with patch("src.main.pd.DataFrame.to_excel", side_effect=OSError("disk full")):
+                with patch("src.main.Workbook.save", side_effect=OSError("disk full")):
                     with self.assertNoLogs("src.main", level="INFO"):
                         with self.assertRaises(OSError):
                             save_outputs(parse_books(BOOK_HTML))
@@ -415,6 +416,78 @@ class LoggingTests(unittest.TestCase):
     def test_main_configures_readable_info_logging(self, configure, collect, save):
         main()
         configure.assert_called_once_with(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+
+class ExcelExportTests(unittest.TestCase):
+    def test_excel_layout_and_data_survive_round_trip(self):
+        rows = parse_books(BOOK_HTML)
+        second = {**rows[0], "title": "A longer book title " * 8,
+                  "price_gbp": 0.0, "rating": 5, "product_url": URL + "catalogue/second/index.html"}
+        rows.append(second)
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            with patch("src.main.OUTPUT_DIR", output_dir):
+                save_outputs(rows)
+            workbook = load_workbook(output_dir / "books.xlsx")
+            try:
+                self.assertEqual(workbook.sheetnames, ["Sheet1"])
+                sheet = workbook.active
+                self.assertEqual(sheet.max_column, 5)
+                self.assertEqual(sheet.max_row, 3)
+                self.assertEqual([cell.value for cell in sheet[1]], list(FIELDS))
+                self.assertEqual(sheet.freeze_panes, "A2")
+                self.assertEqual(sheet.auto_filter.ref, "A1:E3")
+                for cell in sheet[1]:
+                    self.assertTrue(cell.font.bold)
+                    self.assertEqual(cell.font.color.rgb, "00FFFFFF")
+                    self.assertEqual(cell.fill.fill_type, "solid")
+                    self.assertEqual(cell.fill.fgColor.rgb, "00334155")
+                for column in "ABCDE":
+                    self.assertGreaterEqual(sheet.column_dimensions[column].width,
+                                            len(sheet[f"{column}1"].value) + 2)
+                self.assertGreater(sheet.column_dimensions["A"].width, sheet.column_dimensions["B"].width)
+                self.assertGreater(sheet.column_dimensions["E"].width, sheet.column_dimensions["D"].width)
+                for index, row in enumerate(rows, start=2):
+                    self.assertEqual([cell.value for cell in sheet[index]],
+                                     [row[field] for field in FIELDS])
+                    self.assertEqual(sheet[f"B{index}"].data_type, "n")
+                    self.assertEqual(sheet[f"B{index}"].number_format, '"£"#,##0.00')
+                    self.assertEqual(sheet[f"C{index}"].data_type, "n")
+                    self.assertEqual(sheet[f"C{index}"].number_format, "0")
+                    self.assertEqual(sheet[f"E{index}"].hyperlink.target, row["product_url"])
+                    self.assertEqual(sheet[f"E{index}"].style, "Hyperlink")
+                    self.assertTrue(sheet[f"A{index}"].alignment.wrap_text)
+                self.assertGreater(sheet.row_dimensions[3].height, sheet.row_dimensions[2].height)
+            finally:
+                workbook.close()
+
+    def test_csv_matches_previous_export_bytes(self):
+        rows = parse_books(BOOK_HTML)
+        rows[0]["title"] = 'A title with commas, "quotes", and £ signs'
+        expected = (
+            'title,price_gbp,rating,availability,product_url\n'
+            '"A title with commas, ""quotes"", and £ signs",51.77,3,In stock,'
+            'https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html\n'
+        ).encode("utf-8")
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            with patch("src.main.OUTPUT_DIR", output_dir):
+                save_outputs(rows)
+            self.assertEqual((output_dir / "books.csv").read_bytes(), expected)
+
+    def test_formula_like_titles_remain_literal_text(self):
+        rows = parse_books(BOOK_HTML)
+        rows[0]["title"] = "=A book title"
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            with patch("src.main.OUTPUT_DIR", output_dir):
+                save_outputs(rows)
+            workbook = load_workbook(output_dir / "books.xlsx")
+            try:
+                self.assertEqual(workbook.active["A2"].value, "=A book title")
+                self.assertEqual(workbook.active["A2"].data_type, "s")
+            finally:
+                workbook.close()
 
 
 class ValidationTests(unittest.TestCase):

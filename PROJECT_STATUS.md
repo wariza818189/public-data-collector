@@ -55,6 +55,10 @@ src/main.py currently:
   - data/processed/books.csv
   - data/processed/books.xlsx
 
+Excel export uses openpyxl for a styled header, frozen first row, autofilter,
+column widths, wrapped titles, GBP currency formatting, numeric ratings, and
+clickable product URLs. CSV output and the five-column schema are unchanged.
+
 The price encoding issue is resolved by explicitly decoding the site's HTML as UTF-8.
 Offline tests cover encoding, numeric prices, ratings, URL resolution, and malformed cards.
 Pagination tests cover relative links, multiple pages, final-page stopping, request
@@ -64,6 +68,8 @@ Retry-After, malformed fields, schema and value checks, duplicate URLs, and
 preserving existing exports when validation fails.
 Logging tests cover progress context, retry and failure levels, successful save
 summaries, and no success message after a failed export.
+Excel tests verify saved formatting, numeric values, hyperlinks, long titles,
+literal text, and unchanged CSV bytes.
 README documents the output schema and test command.
 
 ## Next Milestone

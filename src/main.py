@@ -3,11 +3,14 @@ from email.utils import parsedate_to_datetime
 import logging
 from math import isfinite
 from pathlib import Path
+from textwrap import wrap
 from time import sleep
 from urllib.parse import urljoin, urlsplit
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
 
 
 URL = "https://books.toscrape.com/"
@@ -214,6 +217,40 @@ def validate_books(rows: list[dict[str, str | float | int]]) -> None:
         seen_urls.add(product_url)
 
 
+def save_excel(rows: list[dict[str, str | float | int]], path: Path) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    sheet.append(FIELDS)
+
+    for row in rows:
+        sheet.append([row[field] for field in FIELDS])
+
+    for cell in sheet[1]:
+        cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        cell.fill = PatternFill(fill_type="solid", fgColor="334155")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 22
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    for column, width in (("A", 60), ("B", 14), ("C", 10), ("D", 18), ("E", 70)):
+        sheet.column_dimensions[column].width = width
+
+    for title, price, rating, availability, product_url in sheet.iter_rows(min_row=2):
+        # Preserve collected text as text, even when it starts with '='.
+        for cell in (title, availability, product_url):
+            cell.data_type = "s"
+        title.alignment = Alignment(wrap_text=True, vertical="top")
+        sheet.row_dimensions[title.row].height = 15 * max(1, len(wrap(title.value, width=55)))
+        price.number_format = '"£"#,##0.00'
+        rating.number_format = "0"
+        product_url.hyperlink = product_url.value
+        product_url.style = "Hyperlink"
+
+    workbook.save(path)
+    workbook.close()
+
+
 def save_outputs(rows: list[dict[str, str | float | int]]) -> None:
     validate_books(rows)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -224,7 +261,7 @@ def save_outputs(rows: list[dict[str, str | float | int]]) -> None:
     xlsx_path = OUTPUT_DIR / "books.xlsx"
 
     df.to_csv(csv_path, index=False)
-    df.to_excel(xlsx_path, index=False)
+    save_excel(rows, xlsx_path)
 
     logger.info("Saved %d books | CSV: %s | Excel: %s", len(df), csv_path, xlsx_path)
 

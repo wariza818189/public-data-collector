@@ -54,6 +54,12 @@ Exports:
 - CSV
 - Excel
 
+The Excel workbook uses openpyxl to add a restrained header style, a frozen header
+row, filters, and readable column widths. Long titles wrap, prices display as GBP
+currency with two decimal places, ratings stay numeric, and product URLs are
+clickable hyperlinks. Both exports retain the same five columns; CSV formatting
+is unchanged.
+
 Generated data is stored under:
 
 data/processed/
@@ -87,7 +93,7 @@ the original exception. DEBUG messages are hidden by default.
 
 ## Tests
 
-Run the offline encoding, parser, pagination, retry, validation, and logging tests in the shared environment:
+Run the offline encoding, parser, pagination, retry, validation, logging, and Excel export tests in the shared environment:
 
 ```bash
 python -m unittest discover -s tests -v
