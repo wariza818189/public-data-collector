@@ -1,4 +1,5 @@
 from pathlib import Path
+from time import sleep
 from urllib.parse import urljoin
 import requests
 import pandas as pd
@@ -64,6 +65,39 @@ def parse_books(html: str, base_url: str = URL) -> list[dict[str, str | float | 
     return books
 
 
+def parse_next_page(html: str, base_url: str) -> str | None:
+    soup = BeautifulSoup(html, "lxml")
+    next_link = soup.select_one("li.next a")
+    if next_link is None:
+        return None
+    href = next_link.get("href", "").strip()
+    if not href:
+        raise ValueError(f"Next-page link has no URL on {base_url}")
+    return urljoin(base_url, href)
+
+
+def collect_books(start_url: str = URL) -> list[dict[str, str | float | int]]:
+    books = []
+    visited: set[str] = set()
+    page_url: str | None = start_url
+
+    while page_url is not None:
+        if page_url in visited:
+            raise RuntimeError(f"Pagination loop detected at {page_url}")
+        if visited:
+            sleep(1)
+        print(f"Fetching: {page_url}")
+        html = fetch_html(page_url)
+        page_books = parse_books(html, page_url)
+        if not page_books:
+            raise RuntimeError(f"No books found on {page_url}. Page structure may have changed.")
+        books.extend(page_books)
+        visited.add(page_url)
+        page_url = parse_next_page(html, page_url)
+
+    return books
+
+
 def save_outputs(rows: list[dict[str, str | float | int]]) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -81,14 +115,7 @@ def save_outputs(rows: list[dict[str, str | float | int]]) -> None:
 
 
 def main() -> None:
-    print(f"Fetching: {URL}")
-
-    html = fetch_html(URL)
-    books = parse_books(html)
-
-    if not books:
-        raise RuntimeError("No books found. Page structure may have changed.")
-
+    books = collect_books()
     save_outputs(books)
 
 

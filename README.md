@@ -21,7 +21,8 @@ This is a public practice website intended for scraping exercises.
 
 ## Current Output
 
-The collector extracts the 20 books on the first page only:
+The collector follows next-page links through the full Books to Scrape catalogue
+(currently 50 pages and 1,000 books), extracting:
 
 - title
 - price_gbp (numeric price in British pounds)
@@ -31,6 +32,9 @@ The collector extracts the 20 books on the first page only:
 
 The site's HTML is decoded as UTF-8 to preserve the pound sign before price conversion.
 Malformed book cards raise an error before output is exported.
+Requests run sequentially with a one-second pause between pages. Product URLs are
+resolved against each page's URL. Missing books, failed requests, and pagination
+loops stop collection before export, preserving any existing output files.
 
 Exports:
 
@@ -59,7 +63,7 @@ python src/main.py
 
 ## Tests
 
-Run the offline encoding and parser tests in the shared environment:
+Run the offline encoding, parser, and pagination tests in the shared environment:
 
 ```bash
 python -m unittest discover -s tests -v
@@ -69,7 +73,6 @@ python -m unittest discover -s tests -v
 
 The goal is to evolve this into a portfolio-quality data extraction project with:
 
-- pagination
 - structured parsing
 - clean numeric fields
 - ratings

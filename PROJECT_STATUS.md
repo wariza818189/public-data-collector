@@ -35,8 +35,10 @@ Verified environment:
 
 src/main.py currently:
 
-- fetches the first page of Books to Scrape
-- parses 20 books
+- follows next-page links through the full Books to Scrape catalogue
+- parses 1,000 books across 50 pages
+- pauses one second between page requests
+- detects pagination loops and exports only after all pages are collected
 - extracts:
   - title
   - numeric price_gbp
@@ -49,17 +51,16 @@ src/main.py currently:
 
 The price encoding issue is resolved by explicitly decoding the site's HTML as UTF-8.
 Offline tests cover encoding, numeric prices, ratings, URL resolution, and malformed cards.
+Pagination tests cover relative links, multiple pages, final-page stopping, request
+pacing, loops, and failures without partial export.
 README documents the output schema and test command.
 
 ## Next Milestone
 
-The first-page target fields are implemented. Future work:
+The target fields and full-catalogue pagination are implemented. Future work:
 
-- pagination
 - logging
 - broader output validation
-
-Pagination remains outside the current task; the collector fetches only the first page.
 
 ## Explicitly Out of Scope For Now
 
