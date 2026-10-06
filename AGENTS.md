@@ -32,8 +32,7 @@ Do not introduce Playwright when static HTTP is sufficient.
 ## Repository Hygiene
 
 - Do not create a virtual environment inside this repo.
-- The shared venv is:
-  ~/automation-lab/.venv
+- Use an external virtual environment; see README.md for portable setup instructions.
 - Do not commit generated CSV/XLSX files.
 - Do not commit secrets or .env files.
 - Do not commit or push unless explicitly requested.
