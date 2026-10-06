@@ -43,6 +43,8 @@ src/main.py currently:
 - detects pagination loops and exports only after all pages are collected
 - reports malformed fields with page and book context
 - validates the complete dataset before writing either export
+- uses standard console logging: INFO for page progress and saves, WARNING for retries,
+  and ERROR for final run failures; DEBUG is hidden by default
 - extracts:
   - title
   - numeric price_gbp
@@ -60,14 +62,15 @@ pacing, loops, and failures without partial export.
 Failure tests cover retry limits, permanent errors, backoff, request timeouts,
 Retry-After, malformed fields, schema and value checks, duplicate URLs, and
 preserving existing exports when validation fails.
+Logging tests cover progress context, retry and failure levels, successful save
+summaries, and no success message after a failed export.
 README documents the output schema and test command.
 
 ## Next Milestone
 
-The target fields, full-catalogue pagination, retries, and output validation are implemented.
-Future work:
-
-- logging
+The target fields, full-catalogue pagination, retries, output validation, and console
+logging are implemented. The Phase 1 collector milestones are complete; the next
+milestone has not yet been selected.
 
 ## Explicitly Out of Scope For Now
 

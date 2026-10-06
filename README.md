@@ -80,9 +80,14 @@ python -m pip install -r requirements-dev.txt
 
 python src/main.py
 
+Console logging uses a concise `LEVEL: message` format. INFO messages show each
+page number and URL, then the saved book count and both output paths. Retries use
+WARNING with the attempt, delay, and cause; final failures use ERROR and retain
+the original exception. DEBUG messages are hidden by default.
+
 ## Tests
 
-Run the offline encoding, parser, pagination, retry, and validation tests in the shared environment:
+Run the offline encoding, parser, pagination, retry, validation, and logging tests in the shared environment:
 
 ```bash
 python -m unittest discover -s tests -v

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import logging
 from math import isfinite
 from pathlib import Path
 from time import sleep
@@ -16,6 +17,7 @@ FIELDS = ("title", "price_gbp", "rating", "availability", "product_url")
 REQUEST_TIMEOUT = (5, 20)  # Connect and read timeouts, in seconds.
 MAX_ATTEMPTS = 3
 RETRY_STATUSES = {408, 429, 500, 502, 503, 504}
+logger = logging.getLogger(__name__)
 
 
 def retry_delay(response: requests.Response | None, attempt: int) -> float:
@@ -64,7 +66,10 @@ def fetch_html(url: str) -> str:
             # Stop rather than retry earlier than a long server-requested delay.
             if delay > 60:
                 raise RuntimeError(f"Failed to fetch {url}: Retry-After exceeds 60 seconds") from exc
-            print(f"Retrying {url} in {delay:g}s after attempt {attempt}: {exc}")
+            logger.warning(
+                "Retrying %s in %gs after attempt %d/%d: %s",
+                url, delay, attempt, MAX_ATTEMPTS, exc,
+            )
         finally:
             if response is not None:
                 response.close()
@@ -172,7 +177,7 @@ def collect_books(start_url: str = URL) -> list[dict[str, str | float | int]]:
             raise RuntimeError(f"Pagination loop detected at {page_url}")
         if visited:
             sleep(1)
-        print(f"Fetching: {page_url}")
+        logger.info("Fetching page %d: %s", len(visited) + 1, page_url)
         html = fetch_html(page_url)
         page_books = parse_books(html, page_url)
         if not page_books:
@@ -221,14 +226,17 @@ def save_outputs(rows: list[dict[str, str | float | int]]) -> None:
     df.to_csv(csv_path, index=False)
     df.to_excel(xlsx_path, index=False)
 
-    print(f"Saved {len(df)} rows")
-    print(f"CSV:   {csv_path}")
-    print(f"Excel: {xlsx_path}")
+    logger.info("Saved %d books | CSV: %s | Excel: %s", len(df), csv_path, xlsx_path)
 
 
 def main() -> None:
-    books = collect_books()
-    save_outputs(books)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    try:
+        books = collect_books()
+        save_outputs(books)
+    except (RuntimeError, ValueError, OSError) as exc:
+        logger.error("Collector failed: %s", exc)
+        raise
 
 
 if __name__ == "__main__":

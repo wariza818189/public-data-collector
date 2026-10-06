@@ -1,4 +1,5 @@
 import unittest
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -325,6 +326,95 @@ class FetchFailureTests(unittest.TestCase):
             call(URL + "catalogue/page-2.html", timeout=REQUEST_TIMEOUT),
             call(URL + "catalogue/page-2.html", timeout=REQUEST_TIMEOUT),
         ])
+
+
+class LoggingTests(unittest.TestCase):
+    @patch("src.main.sleep")
+    @patch("src.main.fetch_html")
+    def test_page_progress_is_info_and_includes_number_and_url(self, fetch, sleep_mock):
+        fetch.side_effect = [
+            BOOK_HTML + '<li class="next"><a href="catalogue/page-2.html">next</a></li>',
+            BOOK_HTML,
+        ]
+        with self.assertLogs("src.main", level="INFO") as captured:
+            collect_books()
+        self.assertEqual([record.levelno for record in captured.records],
+                         [logging.INFO, logging.INFO])
+        self.assertEqual([record.getMessage() for record in captured.records], [
+            "Fetching page 1: " + URL,
+            "Fetching page 2: " + URL + "catalogue/page-2.html",
+        ])
+
+    @patch("src.main.sleep")
+    @patch("src.main.requests.get")
+    def test_recovered_retry_is_warning_without_final_error(self, get, sleep_mock):
+        get.side_effect = [requests.Timeout("read timed out"), make_response()]
+        with self.assertLogs("src.main", level="INFO") as captured:
+            fetch_html(URL)
+        self.assertEqual(len(captured.records), 1)
+        record = captured.records[0]
+        self.assertEqual(record.levelno, logging.WARNING)
+        for detail in (URL, "in 1s", "attempt 1/3", "read timed out"):
+            self.assertIn(detail, record.getMessage())
+
+    @patch("src.main.sleep")
+    @patch("src.main.requests.get", side_effect=requests.Timeout("read timed out"))
+    def test_exhaustion_logs_one_final_error_and_still_raises(self, get, sleep_mock):
+        with self.assertLogs("src.main", level="INFO") as captured:
+            with self.assertRaisesRegex(RuntimeError, "after 3 attempt"):
+                main()
+        self.assertEqual([record.levelno for record in captured.records],
+                         [logging.INFO, logging.WARNING, logging.WARNING, logging.ERROR])
+        message = captured.records[-1].getMessage()
+        for detail in ("Collector failed", URL, "after 3 attempt", "read timed out"):
+            self.assertIn(detail, message)
+
+    def test_parsing_validation_and_save_failures_are_errors(self):
+        for error in (ValueError("invalid price_gbp"), OSError("permission denied")):
+            with self.subTest(error=error):
+                with patch("src.main.collect_books", return_value=parse_books(BOOK_HTML)):
+                    with patch("src.main.save_outputs", side_effect=error):
+                        with self.assertLogs("src.main", level="ERROR") as captured:
+                            with self.assertRaises(type(error)) as caught:
+                                main()
+                self.assertIs(caught.exception, error)
+                self.assertEqual(len(captured.records), 1)
+                self.assertIn(str(error), captured.records[0].getMessage())
+        with patch("src.main.collect_books", side_effect=ValueError("Book 1: missing title")):
+            with self.assertLogs("src.main", level="ERROR") as captured:
+                with self.assertRaises(ValueError):
+                    main()
+        self.assertIn("missing title", captured.records[0].getMessage())
+
+    def test_save_summary_follows_both_successful_exports(self):
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            with patch("src.main.OUTPUT_DIR", output_dir):
+                with self.assertLogs("src.main", level="INFO") as captured:
+                    save_outputs(parse_books(BOOK_HTML))
+            self.assertTrue((output_dir / "books.csv").exists())
+            self.assertTrue((output_dir / "books.xlsx").exists())
+            self.assertEqual(len(captured.records), 1)
+            self.assertEqual(captured.records[0].levelno, logging.INFO)
+            message = captured.records[0].getMessage()
+            for detail in ("Saved 1 books", str(output_dir / "books.csv"),
+                           str(output_dir / "books.xlsx")):
+                self.assertIn(detail, message)
+
+    def test_failed_export_has_no_success_summary(self):
+        with TemporaryDirectory() as temporary:
+            with patch("src.main.OUTPUT_DIR", Path(temporary)):
+                with patch("src.main.pd.DataFrame.to_excel", side_effect=OSError("disk full")):
+                    with self.assertNoLogs("src.main", level="INFO"):
+                        with self.assertRaises(OSError):
+                            save_outputs(parse_books(BOOK_HTML))
+
+    @patch("src.main.save_outputs")
+    @patch("src.main.collect_books", return_value=[])
+    @patch("src.main.logging.basicConfig")
+    def test_main_configures_readable_info_logging(self, configure, collect, save):
+        main()
+        configure.assert_called_once_with(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
 class ValidationTests(unittest.TestCase):
