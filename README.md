@@ -21,11 +21,16 @@ This is a public practice website intended for scraping exercises.
 
 ## Current Output
 
-The collector currently extracts:
+The collector extracts the 20 books on the first page only:
 
 - title
-- price
+- price_gbp (numeric price in British pounds)
+- rating (integer from 1 to 5)
 - availability
+- product_url (absolute URL)
+
+The site's HTML is decoded as UTF-8 to preserve the pound sign before price conversion.
+Malformed book cards raise an error before output is exported.
 
 Exports:
 
@@ -51,6 +56,14 @@ source ~/automation-lab/.venv/bin/activate
 ## Run
 
 python src/main.py
+
+## Tests
+
+Run the offline encoding and parser tests in the shared environment:
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## Project Direction
 

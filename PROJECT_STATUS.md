@@ -39,43 +39,27 @@ src/main.py currently:
 - parses 20 books
 - extracts:
   - title
-  - raw price
+  - numeric price_gbp
+  - rating (1–5)
   - availability
+  - absolute product_url
 - exports:
   - data/processed/books.csv
   - data/processed/books.xlsx
 
-## Known Issue
-
-The current price output contains mojibake:
-
-Â£51.77
-
-Expected:
-
-£51.77
-
-This needs to be corrected before expanding the scraper.
+The price encoding issue is resolved by explicitly decoding the site's HTML as UTF-8.
+Offline tests cover encoding, numeric prices, ratings, URL resolution, and malformed cards.
+README documents the output schema and test command.
 
 ## Next Milestone
 
-Improve the collector without overengineering.
-
-Target fields:
-
-- title
-- price_gbp as numeric data
-- rating
-- availability
-- absolute product_url
-
-Then add:
+The first-page target fields are implemented. Future work:
 
 - pagination
 - logging
-- parser tests
-- output validation
-- README documentation
+- broader output validation
+
+Pagination remains outside the current task; the collector fetches only the first page.
 
 ## Explicitly Out of Scope For Now
 
