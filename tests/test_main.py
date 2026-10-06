@@ -1,9 +1,15 @@
 import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import call, patch
 
 import requests
 
-from src.main import URL, collect_books, fetch_html, main, parse_books, parse_next_page
+from src.main import (
+    REQUEST_TIMEOUT, URL, collect_books, fetch_html, main, parse_books,
+    parse_next_page, retry_delay, save_outputs, validate_books,
+)
 
 
 BOOK_HTML = """
@@ -25,7 +31,7 @@ class CollectorTests(unittest.TestCase):
         response.encoding = "ISO-8859-1"
         with patch("src.main.requests.get", return_value=response) as get:
             html = fetch_html("https://books.toscrape.com/")
-        get.assert_called_once_with("https://books.toscrape.com/", timeout=20)
+        get.assert_called_once_with("https://books.toscrape.com/", timeout=REQUEST_TIMEOUT)
         self.assertEqual(html, BOOK_HTML)
         self.assertEqual(parse_books(html)[0]["price_gbp"], 51.77)
 
@@ -58,7 +64,7 @@ class CollectorTests(unittest.TestCase):
 
     def test_invalid_fields_raise_clear_errors(self):
         cases = (
-            (BOOK_HTML.replace("price_color", "missing"), "missing a required field"),
+            (BOOK_HTML.replace("price_color", "missing"), "missing required field price_gbp"),
             (BOOK_HTML.replace("Three", "Unknown"), "unknown rating"),
             (BOOK_HTML.replace("£51.77", "Â£51.77"), "expected a GBP price"),
             (BOOK_HTML.replace("£51.77", "£invalid"), "invalid price"),
@@ -70,6 +76,28 @@ class CollectorTests(unittest.TestCase):
 
     def test_page_without_books(self):
         self.assertEqual(parse_books("<html></html>"), [])
+
+    def test_malformed_fields_include_book_and_page_context(self):
+        cases = (
+            (BOOK_HTML.replace('title="A Light in the Attic"', ''), "title"),
+            (BOOK_HTML.replace('href="catalogue/a-light-in-the-attic_1000/index.html"', ''), "product_url"),
+            (BOOK_HTML.replace('h3', 'h4'), "title/product_url"),
+            (BOOK_HTML.replace('star-rating', 'missing'), "rating"),
+            (BOOK_HTML.replace('availability', 'missing'), "availability"),
+            (BOOK_HTML.replace('In stock', ' '), "availability"),
+            (BOOK_HTML.replace('Three', 'Three Five'), "rating"),
+            (BOOK_HTML.replace('£51.77', '£nan'), "price_gbp"),
+            (BOOK_HTML.replace('£51.77', '£inf'), "price_gbp"),
+            (BOOK_HTML.replace('£51.77', '£-1.00'), "price_gbp"),
+            (BOOK_HTML.replace('catalogue/a-light-in-the-attic_1000/index.html', 'javascript:alert(1)'), "product_url"),
+            (BOOK_HTML.replace('catalogue/a-light-in-the-attic_1000/index.html', 'http://['), "product_url"),
+        )
+        for html, field in cases:
+            with self.subTest(field=field, html=html):
+                with self.assertRaises(ValueError) as caught:
+                    parse_books(html, URL)
+                self.assertIn("Book 1 on " + URL, str(caught.exception))
+                self.assertIn(field, str(caught.exception))
 
 
 class PaginationTests(unittest.TestCase):
@@ -93,6 +121,16 @@ class PaginationTests(unittest.TestCase):
             with self.subTest(attributes=attributes):
                 with self.assertRaisesRegex(ValueError, "Next-page link has no URL"):
                     parse_next_page(f'<li class="next"><a {attributes}>next</a></li>', URL)
+
+    def test_malformed_next_link_is_not_treated_as_final_page(self):
+        for html in (
+            '<li class="next">next</li>',
+            '<li class="next"><a href="javascript:alert(1)">next</a></li>',
+            '<li class="next"><a href="http://[">next</a></li>',
+        ):
+            with self.subTest(html=html):
+                with self.assertRaises(ValueError):
+                    parse_next_page(html, URL)
 
     @patch("src.main.sleep")
     @patch("src.main.fetch_html")
@@ -154,6 +192,7 @@ class PaginationTests(unittest.TestCase):
         cases = (
             ("<html></html>", RuntimeError, "No books found"),
             (requests.HTTPError("HTTP 503"), requests.HTTPError, "HTTP 503"),
+            (BOOK_HTML.replace("£51.77", "£nan"), ValueError, "price_gbp"),
         )
         for second_page, error, message in cases:
             with self.subTest(message=message):
@@ -162,6 +201,189 @@ class PaginationTests(unittest.TestCase):
                     with self.assertRaisesRegex(error, message):
                         main()
                 save.assert_not_called()
+
+
+def make_response(status: int = 200, html: str = BOOK_HTML) -> requests.Response:
+    response = requests.Response()
+    response.status_code = status
+    response.url = URL
+    response._content = html.encode("utf-8")
+    response._content_consumed = True
+    return response
+
+
+class FetchFailureTests(unittest.TestCase):
+    @patch("src.main.sleep")
+    @patch("src.main.requests.get")
+    def test_transient_network_errors_retry_with_backoff(self, get, sleep_mock):
+        for failure in (
+            requests.Timeout("read timed out"),
+            requests.ConnectionError("connection reset"),
+            requests.exceptions.ChunkedEncodingError("incomplete response"),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                get.reset_mock()
+                sleep_mock.reset_mock()
+                get.side_effect = [failure, failure, make_response()]
+                self.assertEqual(fetch_html(URL), BOOK_HTML)
+                self.assertEqual(get.call_args_list, [call(URL, timeout=(5, 20))] * 3)
+                self.assertEqual(sleep_mock.call_args_list, [call(1.0), call(2.0)])
+
+    @patch("src.main.sleep")
+    @patch("src.main.requests.get")
+    def test_transient_http_statuses_retry(self, get, sleep_mock):
+        for status in (408, 429, 500, 502, 503, 504):
+            with self.subTest(status=status):
+                get.reset_mock()
+                sleep_mock.reset_mock()
+                failed_response = make_response(status)
+                with patch.object(failed_response, "close") as close:
+                    get.side_effect = [failed_response, make_response()]
+                    self.assertEqual(fetch_html(URL), BOOK_HTML)
+                    close.assert_called_once()
+                self.assertEqual(get.call_count, 2)
+                sleep_mock.assert_called_once_with(1.0)
+
+    @patch("src.main.sleep")
+    @patch("src.main.requests.get")
+    def test_exhaustion_has_url_attempt_count_and_original_cause(self, get, sleep_mock):
+        for failure in (requests.Timeout("timed out"), make_response(503)):
+            with self.subTest(failure=failure):
+                get.reset_mock()
+                sleep_mock.reset_mock()
+                get.side_effect = [failure] * 3
+                with self.assertRaises(RuntimeError) as caught:
+                    fetch_html(URL)
+                self.assertIn(URL, str(caught.exception))
+                self.assertIn("after 3 attempt(s)", str(caught.exception))
+                self.assertIsInstance(caught.exception.__cause__, requests.RequestException)
+                self.assertEqual(get.call_count, 3)
+                self.assertEqual(sleep_mock.call_args_list, [call(1.0), call(2.0)])
+
+    @patch("src.main.sleep")
+    @patch("src.main.requests.get")
+    def test_permanent_errors_are_not_retried(self, get, sleep_mock):
+        for failure in (
+            make_response(403), make_response(404), make_response(501),
+            requests.exceptions.SSLError("certificate verification failed"),
+            requests.exceptions.InvalidURL("invalid URL"),
+        ):
+            with self.subTest(failure=failure):
+                get.reset_mock()
+                get.side_effect = [failure]
+                with self.assertRaisesRegex(RuntimeError, "after 1 attempt"):
+                    fetch_html(URL)
+                self.assertEqual(get.call_count, 1)
+                sleep_mock.assert_not_called()
+
+    @patch("src.main.sleep")
+    @patch("src.main.requests.get", side_effect=requests.Timeout("read timed out"))
+    def test_exhausted_network_failure_does_not_export(self, get, sleep_mock):
+        with patch("src.main.save_outputs") as save:
+            with self.assertRaisesRegex(RuntimeError, "after 3 attempt"):
+                main()
+            save.assert_not_called()
+        self.assertEqual(get.call_count, 3)
+
+    @patch("src.main.sleep")
+    @patch("src.main.requests.get")
+    def test_retry_after_is_honored_or_stops_for_long_delay(self, get, sleep_mock):
+        response = make_response(429)
+        response.headers["Retry-After"] = "5"
+        get.side_effect = [response, make_response()]
+        self.assertEqual(fetch_html(URL), BOOK_HTML)
+        sleep_mock.assert_called_once_with(5.0)
+        sleep_mock.reset_mock()
+        get.reset_mock()
+        response.headers["Retry-After"] = "120"
+        get.side_effect = [response]
+        with self.assertRaisesRegex(RuntimeError, "Retry-After exceeds 60 seconds"):
+            fetch_html(URL)
+        sleep_mock.assert_not_called()
+        self.assertEqual(get.call_count, 1)
+
+    def test_retry_after_date_and_invalid_values(self):
+        response = make_response(503)
+        response.headers["Retry-After"] = "Tue, 06 Oct 2026 00:00:05 GMT"
+        with patch("src.main.datetime") as clock:
+            clock.now.return_value = datetime(2026, 10, 6, tzinfo=timezone.utc)
+            self.assertEqual(retry_delay(response, 1), 5.0)
+        for value in ("invalid", "-1", "nan", "inf"):
+            with self.subTest(value=value):
+                response.headers["Retry-After"] = value
+                self.assertEqual(retry_delay(response, 2), 2.0)
+
+    @patch("src.main.sleep")
+    @patch("src.main.requests.get")
+    def test_retry_preserves_one_second_page_pacing(self, get, sleep_mock):
+        first = BOOK_HTML + '<li class="next"><a href="catalogue/page-2.html">next</a></li>'
+        get.side_effect = [make_response(html=first), requests.Timeout("timeout"), make_response()]
+        self.assertEqual(len(collect_books()), 2)
+        self.assertEqual(sleep_mock.call_args_list, [call(1), call(1.0)])
+        self.assertEqual(get.call_args_list, [
+            call(URL, timeout=REQUEST_TIMEOUT),
+            call(URL + "catalogue/page-2.html", timeout=REQUEST_TIMEOUT),
+            call(URL + "catalogue/page-2.html", timeout=REQUEST_TIMEOUT),
+        ])
+
+
+class ValidationTests(unittest.TestCase):
+    def test_valid_books_and_zero_price(self):
+        rows = parse_books(BOOK_HTML)
+        validate_books(rows)
+        rows[0]["price_gbp"] = 0.0
+        validate_books(rows)
+
+    def test_invalid_output_fields(self):
+        original = parse_books(BOOK_HTML)[0]
+        cases = (
+            ("title", " "), ("title", None), ("availability", ""),
+            ("price_gbp", "51.77"), ("price_gbp", True), ("price_gbp", -1),
+            ("price_gbp", float("nan")), ("price_gbp", float("inf")),
+            ("rating", 0), ("rating", 6), ("rating", 3.0), ("rating", True),
+            ("product_url", "relative/index.html"), ("product_url", "https://"),
+            ("product_url", "javascript:alert(1)"), ("product_url", "http://["),
+            ("product_url", "https://books.toscrape.com:bad/book"),
+            ("product_url", "https://books.toscrape.com/a book"),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(ValueError, "Output row 1: " + field):
+                    validate_books([{**original, field: value}])
+
+    def test_empty_output_wrong_schema_and_duplicate_urls(self):
+        row = parse_books(BOOK_HTML)[0]
+        with self.assertRaisesRegex(ValueError, "no books"):
+            validate_books([])
+        for invalid in (None, {"title": "Only a title"}, {**row, "extra": 1}):
+            with self.subTest(row=invalid):
+                with self.assertRaisesRegex(ValueError, "expected fields"):
+                    validate_books([invalid])
+        with self.assertRaisesRegex(ValueError, "Output row 2: duplicate product_url"):
+            validate_books([row, row.copy()])
+
+    def test_invalid_output_preserves_existing_files(self):
+        valid = parse_books(BOOK_HTML)[0]
+        invalid = {**valid, "rating": 6}
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary)
+            csv = output_dir / "books.csv"
+            xlsx = output_dir / "books.xlsx"
+            csv.write_bytes(b"existing CSV")
+            xlsx.write_bytes(b"existing Excel")
+            with patch("src.main.OUTPUT_DIR", output_dir):
+                with self.assertRaisesRegex(ValueError, "Output row 2: rating"):
+                    save_outputs([valid, invalid])
+            self.assertEqual(csv.read_bytes(), b"existing CSV")
+            self.assertEqual(xlsx.read_bytes(), b"existing Excel")
+
+    def test_validation_precedes_directory_creation(self):
+        with TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "not-created"
+            with patch("src.main.OUTPUT_DIR", output_dir):
+                with self.assertRaises(ValueError):
+                    save_outputs([])
+            self.assertFalse(output_dir.exists())
 
 
 if __name__ == "__main__":

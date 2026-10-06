@@ -31,10 +31,23 @@ The collector follows next-page links through the full Books to Scrape catalogue
 - product_url (absolute URL)
 
 The site's HTML is decoded as UTF-8 to preserve the pound sign before price conversion.
-Malformed book cards raise an error before output is exported.
+Malformed book cards raise an error identifying the page URL, book number, and field.
 Requests run sequentially with a one-second pause between pages. Product URLs are
 resolved against each page's URL. Missing books, failed requests, and pagination
 loops stop collection before export, preserving any existing output files.
+
+Each request has a 5-second connect timeout and a 20-second read timeout. Timeouts,
+connection failures, incomplete responses, and HTTP 408, 429, 500, 502, 503, and 504
+are retried up to three total attempts, with 1-second then 2-second backoff.
+Server `Retry-After` delays are honored; delays over 60 seconds stop the run rather
+than retrying early. Other HTTP errors and TLS certificate errors fail immediately.
+Read timeouts limit inactivity while receiving data, rather than total run time.
+
+Before writing either export, validation requires the exact five-field schema,
+nonempty titles and availability, finite nonnegative numeric prices, integer ratings
+from 1 to 5, and unique absolute HTTP(S) product URLs. Empty or invalid datasets
+raise a row-specific error before output files are opened. The catalogue size is
+not hardcoded, so changes to the site's book count are supported.
 
 Exports:
 
@@ -57,13 +70,19 @@ Activate it with:
 
 source ~/automation-lab/.venv/bin/activate
 
+Install development and test dependencies (including runtime dependencies) with:
+
+```bash
+python -m pip install -r requirements-dev.txt
+```
+
 ## Run
 
 python src/main.py
 
 ## Tests
 
-Run the offline encoding, parser, and pagination tests in the shared environment:
+Run the offline encoding, parser, pagination, retry, and validation tests in the shared environment:
 
 ```bash
 python -m unittest discover -s tests -v

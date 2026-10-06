@@ -38,7 +38,11 @@ src/main.py currently:
 - follows next-page links through the full Books to Scrape catalogue
 - parses 1,000 books across 50 pages
 - pauses one second between page requests
+- uses 5-second connect and 20-second read timeouts
+- retries transient failures at most twice, with backoff and Retry-After handling
 - detects pagination loops and exports only after all pages are collected
+- reports malformed fields with page and book context
+- validates the complete dataset before writing either export
 - extracts:
   - title
   - numeric price_gbp
@@ -53,14 +57,17 @@ The price encoding issue is resolved by explicitly decoding the site's HTML as U
 Offline tests cover encoding, numeric prices, ratings, URL resolution, and malformed cards.
 Pagination tests cover relative links, multiple pages, final-page stopping, request
 pacing, loops, and failures without partial export.
+Failure tests cover retry limits, permanent errors, backoff, request timeouts,
+Retry-After, malformed fields, schema and value checks, duplicate URLs, and
+preserving existing exports when validation fails.
 README documents the output schema and test command.
 
 ## Next Milestone
 
-The target fields and full-catalogue pagination are implemented. Future work:
+The target fields, full-catalogue pagination, retries, and output validation are implemented.
+Future work:
 
 - logging
-- broader output validation
 
 ## Explicitly Out of Scope For Now
 
